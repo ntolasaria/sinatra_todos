@@ -1,5 +1,5 @@
 require "sinatra"
-require "sinatra/reloader" if development?
+require "sinatra/reloader" #if development?
 require "sinatra/content_for"
 require "tilt/erubis"
 
@@ -32,25 +32,44 @@ helpers do
   def sort_lists(lists)
     complete_lists, incomplete_lists = lists.partition { |list| list_complete?(list) }
 
-    incomplete_lists.each { |list| yield list, lists.index(list) }
-    complete_lists.each { |list| yield list, lists.index(list) }
+    incomplete_lists.each { |list| yield list }
+    complete_lists.each { |list| yield list }
   end
 
-  def sort_todos(todos)
+  def sort_todos(todos, &block)
     complete_todos, incomplete_todos = todos.partition { |todo| todo[:completed] }
 
-    incomplete_todos.each { |todo| yield todo, todos.index(todo) }
-    complete_todos.each { |todo| yield todo, todos.index(todo) }
+    incomplete_todos.each(&block)
+    complete_todos.each(&block)
   end
 end
 
-def load_list(index)
-  list = session[:lists][index] if index && session[:lists][index]
+def load_list(id)
+  list = session[:lists].find { |list| list[:id] == id }
   return list if list
+
+
+  # list = session[:lists][index] if index && session[:lists][index]
+  # return list if list
 
   session[:error] = "The specified list was not found."
   redirect "/lists"
 end
+
+def next_element_id(elements)
+  max = elements.map { |element| element[:id] }.max || 0
+  max + 1
+end
+
+# def next_todo_id(todos)
+#   max = todos.map { |todo| todo[:id] }.max || 0
+#   max + 1
+# end
+
+# def next_list_id(lists)
+#   max = lists.map { |list| list[:id] }.max || 0
+#   max + 1
+# end
 
 before do
   session[:lists] ||= []
@@ -97,7 +116,8 @@ post "/lists" do
     session[:error] = error
     erb :new_list, layout: :layout
   else
-    session[:lists] << { name: list_name, todos: [] }
+    id = next_element_id(session[:lists])
+    session[:lists] << { id: id, name: list_name, todos: [] }
     session[:success] = "The list has been created."
     redirect "/lists"
   end
@@ -119,7 +139,7 @@ end
 
 # Update an existing todo list 
 post "/lists/:id" do
-  id = params[:id].to_i
+  @list_id = params[:id].to_i
   list_name = params[:list_name].strip
   @list = load_list(@list_id)
 
@@ -130,7 +150,7 @@ post "/lists/:id" do
   else
     @list[:name] = list_name
     session[:success] = "The list has been updated."
-    redirect "/lists/#{id}"
+    redirect "/lists/#{@list_id}"
   end
 end
 
@@ -139,9 +159,13 @@ end
 # several times by a browser for many reasons etc.
 post "/lists/:id/destroy" do
   id = params[:id].to_i
-  session[:lists].delete_at(id)
-  session[:success] = "The list has been deleted."
-  redirect "/lists"
+  session[:lists].delete_if { |list| list[:id] == id }
+  if env["HTTP_X_REQUESTED_WITH"] == "XMLHttpRequest"
+    "/lists"
+  else
+    session[:success] = "The list has been deleted."
+    redirect "/lists"
+  end
 end
 
 # Add a new todo to a list
@@ -155,7 +179,8 @@ post "/lists/:list_id/todos" do
     session[:error] = error
     erb :list, layout: :layout
   else
-    @list[:todos] << {name: text, completed: false}
+    id = next_element_id(@list[:todos])
+    @list[:todos] << {id: id, name: text, completed: false}
     session[:success] = "The todo was added."
     redirect "/lists/#{@list_id}"
   end
@@ -168,9 +193,14 @@ post "/lists/:list_id/todos/:id/destroy" do
 
   todo_id = params[:id].to_i
 
-  @list[:todos].delete_at todo_id
-  session[:success] = "The todo has been deleted."
-  redirect "/lists/#{@list_id}"
+  @list[:todos].delete_if { |todo| todo[:id] == todo_id }
+
+  if env["HTTP_X_REQUESTED_WITH"] == "XMLHttpRequest"
+    status 204  # specifies there is no content
+  else
+    session[:success] = "The todo has been deleted."
+    redirect "/lists/#{@list_id}"
+  end
 end
 
 # Update the status of a todo
@@ -181,7 +211,10 @@ post "/lists/:list_id/todos/:id" do
   todo_id = params[:id].to_i
 
   is_completed = params[:completed] == "true"
-  @list[:todos][todo_id][:completed] = is_completed
+
+  todo = @list[:todos].find { |todo| todo[:id] == todo_id }
+
+  todo[:completed] = is_completed
   session[:success] = "The todo has been updated."
   redirect "/lists/#{@list_id}"
 end
